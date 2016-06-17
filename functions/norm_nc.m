@@ -16,6 +16,8 @@ if nargin > 1
     sigma = std(x);
     
     switch method
+        case 0 
+            y = x;
         case 1 
             y = x./max(abs(x));
         case 2 

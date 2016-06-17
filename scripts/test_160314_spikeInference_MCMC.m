@@ -3,13 +3,24 @@
 [fName, pathName] = uigetfile('D:\# Projects (Noam)\# SLITE\# DATA\*.xlsx','Select Cell''s Data Sheet');
 %% load data
 
-sheet = xlsread([pathName fName]);
-time = sheet(:,1);
+sheet_cell = xlsread([pathName fName]);
+time = sheet_cell(:,1);
 dt = double(time(2)-time(1));
 fs = 1/dt;
-stim = sheet(:,2);
-sig_mat = sheet(:,(3:end)); 
+off_period = 15*fs+1;
+stim = sheet_cell(:,2);
+str = textscan(fName,'%s','delimiter','_');
+full_field_s = [{'CRP'},{'WGN'}];
+full_field = 0;
+if(any(ismember(full_field_s,str{1})))
+    sig_mat = sheet_cell(off_period:end,(3:end-1)); 
+    dr = sheet_cell(off_period:end,end); % dark region in the FOV
+    full_field = 1;
+else
+    sig_mat = sheet_cell(off_period:end,(3:end)); 
+end
 num_sig = size(sig_mat,2);
+time = time(1:size(sig_mat,1));
 %% load artifact
 
 [fName, pathName] = uigetfile('D:\# Projects (Noam)\# SLITE\# DATA\*.xlsx','Select Cell''s Data Sheet');

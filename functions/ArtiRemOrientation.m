@@ -23,6 +23,7 @@ if nargin < 3 % default
     filt_thres = 1e3;
     fs = 10;
     maxl_phase = 16;
+    corr_thresh = .7;
 else
     if isfield(param,'std_filt_binsize'); filt_bs = param.std_filt_binsize;end;
     if isfield(param,'safty'); safty = param.safty; end
@@ -30,6 +31,7 @@ else
     if isfield(param,'filt_thres'); filt_thres = param.filt_thres;end;
     if isfield(param,'fs'); fs = param.fs; end
     if isfield(param,'maxl_phase'); maxl_phase = param.maxl_phase; end
+    if isfield(param,'corr_thresh'); corr_thresh = param.corr_thresh;else corr_thresh = .7; end
 end
 
 ind = stdfilt(arti,ones(filt_bs,1));
@@ -59,50 +61,54 @@ for k = 1:size(ind,2)
     df_arti = num2cell( a_iter(a_ind),1 );
     ind_cell = num2cell(a_ind,1);
     [ df_arti_phac,df_data_phac,ind_phac, best_wind, correction_flag ] = ... % phac ~ phase corrected
-        cellfun(@(a, s, ii) correctPhase(a, s, ii),...
+        cellfun(@(a, s, ii) correctPhase(a, s, ii, maxl_phase),...
         df_arti,df_data, ind_cell,'UniformOutput',false);
     [~, best_cell] = max(cell2mat( best_wind ));
-%     df_arti_phac = cell2mat(df_arti_phac);
-%     correction_flag = cell2mat(correction_flag);
-    % LMS b signals X artifact
-    b = df_data_phac{best_cell}; A = df_arti_phac{best_cell};
+    [best_sorted,best_ind_sorted] = sort(cell2mat( best_wind ),'descend');
+    if(any(best_sorted > corr_thresh))
+        window_ind = best_ind_sorted(best_sorted > corr_thresh);
+        window_weigths = best_sorted(best_sorted > corr_thresh)/sum(best_sorted(best_sorted > corr_thresh));
+        h_v = zeros(2, length(window_ind));
+        for jj = 1:length(window_ind)
+            b = df_data_phac{window_ind(jj)}; A = df_arti_phac{window_ind(jj)}; 
+            A = [A(:) ones(numel(A),1)];
+
+            %find LMS solution for gain factor 'k' 
+            h_v(:, jj) = lsqr((A), b(:));
+        end
+        h = h_v * window_weigths';
+    else
+        b = df_data_phac{best_ind_sorted(1)}; A = df_arti_phac{best_ind_sorted(1)}; 
+        A = [A(:) ones(numel(A),1)];
+
+        %find LMS solution for gain factor 'k' 
+        h = lsqr((A), b(:)); 
+    end
     
-    % sum every binn and take the 5 smallest sums that would represent the
-    % baseline
-    A = [A(:) ones(numel(A),1)];
-%     [~,I] = sort(sum(abs(b(:,correction_flag)),1),2,'ascend');
-%     [~, I_del] = ismember([1,size(a_ind(:,correction_flag),2)],I);
-%     I(I_del) = [];
-%     A_ls = A(:,correction_flag);
-%     A_ls = A_ls(:,I(1:5));
-%     b_ls = b(:,correction_flag);
-%     b_ls = b_ls(:,I(1:5));
-    
-    %find LMS solution for gain factor 'k' 
-    h = lsqr((A), b(:));
+%     % LMS b signals X artifact
+%     b = df_data_phac{best_cell}; A = df_arti_phac{best_cell}; 
+%     A = [A(:) ones(numel(A),1)];
+%     
+%     %find LMS solution for gain factor 'k' 
+%     h = lsqr((A), b(:));
     art_ridig = A(:,1) * h(1) + h(2); % A_scaled is the scaled 1D signal for further artifact removal
     
     % subtracting phase df_arti_phac,df_data_phac,ind_phac,
-    
-%     df_arti_phac = df_arti_phac * h(1) + h(2);
-%     df_arti_phac = df_arti_phac - min(df_arti_phac);
-%     outlier_offset = floor(safty/4);
-%     a_iter(a_ind(outlier_offset:end-outlier_offset,:)) = art_rigid(outlier_offset:end-outlier_offset,:);
-    
     out_arti(:,k) = a_iter * h(1) + h(2);
     out_arti(cell2mat(ind_phac(:)),k) = cell2mat(df_arti_phac(:))* h(1) + h(2);
     out_arti(:,k) = out_arti(:,k) - abs(min(out_arti(:,k)));
     out_signal(:,k) = y_iter - out_arti(:,k);
     
 % %     plot
-%     figure(20);plot([b(:),art_ridig(:)]); legend('s','fitted a');
-%     figure(21);h1 = plot(y_iter );hold on; plot(out_signal(:,k)); h1.Color(4) = 0.6;hold off;axis tight
-%     figure(22);subplot(211);plot([y_iter out_signal(:,k)]);axis tight;
-%              subplot(212);plot(out_arti(:,k));axis tight;
+% figure(20);
+%     subplot(311);plot([b(:),art_ridig(:)]); legend('s','fitted a');
+%     subplot(312);h1 = plot(y_iter );hold on; plot(out_signal(:,k)); h1.Color(4) = 0.6;hold off;axis tight
+%     subplot(313);plot([y_iter out_signal(:,k)]);
+%              hold on;plot(-out_arti(:,k)+h(2));hold off;axis tight;
+    end
 end
 
-
-    function [ a_out, s_out, ind_out, rank, flag ] = correctPhase(arti, s, ind)
+function [ a_out, s_out, ind_out, rank, flag ] = correctPhase(arti, s, ind, maxl_phase)
     % find optimal phase with simple xcorr to correct the artifact (source)
     % according to the signal (target)
     % determine - kernel size, binsize
@@ -127,7 +133,7 @@ end
             a_out = conv(arti,z,'valid');
             flag = true;
             s_out = conv(s,z,'valid');
-            ind_out = conv(ind,z,'valid');
+            ind_out = conv(ind,z,'valid') + lags(n);
             
 %             figure(9)
 %             subplot(311);plot([target source]);
@@ -137,5 +143,4 @@ end
             rank = corrcoef(a_out, s_out);
             rank = rank(2);
     end
-end
    
