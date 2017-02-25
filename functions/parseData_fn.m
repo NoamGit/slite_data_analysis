@@ -38,13 +38,10 @@ cellNames = cellNames(3:end);
 getCoord = @(txt) textscan(txt,'%f','delimiter','_');
 getCoord_old = @(txt) textscan(txt,'%f','delimiter','-');
 numInName = textscan(cellNames{1},'%s','delimiter','_');
-if(numel(numInName{:}) == 4)
-    cellIndex = cell2mat(cellfun(@(x) getCoord(x(6:7)) ,cellNames)); % [x ; y]
-    cellCenters = cellfun(@(x) getCoord(x(9:end)) ,cellNames); % [x ; y]
-else
-    cellIndex = (1:num_sig); % [x ; y]
-    cellCenters = cellfun(@(x) getCoord(x(5:end)) ,cellNames); % [x ; y]
-end
+cell_text = (cellfun(@(x) textscan(x,'%s','delimiter','_') ,cellNames)); % format 'Cell_cellIndx_locX_locY'
+cellIndex = cell2mat(cellfun(@(c) str2double(c{2}),cell_text,'UniformOutput',false)); 
+cellCenters = (cellfun(@(c)...
+    [str2double(c{3}),str2double(c{4})],cell_text,'UniformOutput',false)); % [x ; y]
 
 % artifact removal
 param.showFlag = 0;
@@ -121,21 +118,26 @@ params.g = g2;
 % x = Df_mat(:,k);
 P_batch = cell(size(Df_mat,2),1);
 params.print_flag = 1;
-for j = 1:size(Df_mat,2)
+parfor j = 1:size(Df_mat,2)
 %     params.A_lb = 0.115 * range(df_mat(:,j));
-    params_iter = params;
-    params_iter.A_lb = A_lb_init * range(Df_mat(:,k));
-    f = (Df_mat(:,j));
-    SAMPLES = cont_ca_sampler(f,params);  
-    P_batch{j}.C = make_mean_sample(SAMPLES,f);
-    P_batch{j}.S = mean(samples_cell2mat(SAMPLES.ss,size(P_batch{j}.C,2)));
-    P_batch{j}.b = mean(SAMPLES.Cb);
-    P_batch{j}.c1 = mean(SAMPLES.Cin);
-    P_batch{j}.neuron_sn = sqrt(mean(SAMPLES.sn2));
-    P_batch{j}.gn = mean(exp(-params.f./SAMPLES.g));
-    P_batch{j}.samples_mcmc = SAMPLES; % FN added, a useful parameter to have.
-    P_batch{j}.tau = mean(SAMPLES.g * dt)';
-    P_batch{j}.loglikeli = -norm(f' - P_batch{j}.C)^2;
+    try
+        params_iter = params;
+        params_iter.A_lb = A_lb_init * range(Df_mat(:,k));
+        f = (Df_mat(:,j));
+        SAMPLES = cont_ca_sampler(f,params);  
+        P_batch{j}.C = make_mean_sample(SAMPLES,f);
+        P_batch{j}.S = mean(samples_cell2mat(SAMPLES.ss,size(P_batch{j}.C,2)));
+        P_batch{j}.b = mean(SAMPLES.Cb);
+        P_batch{j}.c1 = mean(SAMPLES.Cin);
+        P_batch{j}.neuron_sn = sqrt(mean(SAMPLES.sn2));
+        P_batch{j}.gn = mean(exp(-params.f./SAMPLES.g));
+        P_batch{j}.samples_mcmc = SAMPLES; % FN added, a useful parameter to have.
+        P_batch{j}.tau = mean(SAMPLES.g * dt)';
+        P_batch{j}.loglikeli = -norm(f' - P_batch{j}.C)^2;
+    catch exception
+        disp(['inference problen in cell- ',num2str(j),' because:']); 
+        disp(exception);
+    end
 end
 params.print_flag = 0;
 %% organize and save data to *.mat file
@@ -157,22 +159,24 @@ properties.isnew = isnew_flag;
 T = table;
 
 for k = 1:properties.numCell
-    frame.raw = sig_table{:,k};
-    if(~isempty(a_table_corrected))
-        frame.artifact = a_table_corrected{:,k};
-    else 
-        frame.artifact = 0;
+    if ~isempty(P_batch{k})
+        frame.raw = sig_table{:,k};
+        if(~isempty(a_table_corrected))
+            frame.artifact = a_table_corrected{:,k};
+        else 
+            frame.artifact = 0;
+        end
+        frame.location = cellCenters{:,k};
+        frame.Df = Df_mat(:,k);
+        frame.C = P_batch{k}.C;
+        frame.S = P_batch{k}.S;
+        frame.tau = P_batch{k}.tau;
+        frame.ll = P_batch{k}.loglikeli;
+        frame.mcmc_samples = P_batch{k}.samples_mcmc;
+        head_k = ['Cell_',num2str( cellIndex(k) )];
+        T1 = table(frame, 'VariableName',{head_k} );
+        T = [T T1];
     end
-    frame.location = cellCenters{:,k};
-    frame.Df = Df_mat(:,k);
-    frame.C = P_batch{k}.C;
-    frame.S = P_batch{k}.S;
-    frame.tau = P_batch{k}.tau;
-    frame.ll = P_batch{k}.loglikeli;
-    frame.mcmc_samples = P_batch{k}.samples_mcmc;
-    head_k = ['Cell_',num2str( cellIndex(k) )];
-    T1 = table(frame, 'VariableName',{head_k} );
-    T = [T T1];
 end
 
 dataframe.properties = properties;

@@ -4,7 +4,10 @@
 global logvar;
 logvar = 'List of files with no artifact:';
 
-exclude_list = [];
+exclude_list = ['C:\Users\noambox\Documents\Sync\Neural data\160314 - gcamp6s - old\L1 ',...
+    'C:\Users\noambox\Documents\Sync\Neural data\160314 - gcamp6s - old\L2',...
+    'C:\Users\noambox\Documents\Sync\Neural data\160314 - gcamp6s - old\L1'
+    ];
 
 list_parent_path = dir('C:\Users\noambox\Documents\Sync\Neural data');
 for parent_path = fliplr({list_parent_path.name})
@@ -17,8 +20,12 @@ for parent_path = fliplr({list_parent_path.name})
                 for fName = fliplr({fName_table.name})
 %                     fName = {'DataRaw_ORI_10Hz_3REP_sub1-.xlsx'}; % DEBUGG
                     if(isempty(strfind(fName{1}, 'Artif')))
-                        display([char(10) '******* - running on "',parent_path{1},'\',fName{1},'" - *******' char(10)]);
-                        [ data_stats ] = dataStatistics(['\',fName{1}], pathName , data_stats );
+                        display([char(10) '******* - running on "',pathName,'\',fName{1},'" - *******' char(10)]);
+%                         [ data_stats ] = dataStatistics(['\',fName{1}], pathName , data_stats );
+                        if(isempty(strfind(pathName,'160315')) && isempty(strfind(pathName,exclude_list))) % remove and fix
+                            parseData_fn( ['\',fName{1}], pathName );
+                                disp('foo');
+                        end
                     end
                 end              
             end

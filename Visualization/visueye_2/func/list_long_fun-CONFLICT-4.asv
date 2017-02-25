@@ -1,0 +1,246 @@
+function [handles, hObject] = list_long_fun(handles, hObject, plot_mode)
+%UNTITLED8 Summary of this function goes here
+%   plot_mode == 0 - only signal update
+
+contents = cellstr(get(hObject,'String'));
+selection = contents{get(hObject,'Value')};
+[~, tindx] = ismember(handles.table_focus.cell_name, selection);
+
+% extract data
+celd = handles.table_focus(logical(tindx),:); % cell data
+if(strcmp(handles.data_mode,'new'))
+    default_props = handles.prop_map(cell2mat(celd.fkey));
+    tidx = ismember(handles.table.cell_id,celd.cell_id);
+    celd = handles.table(tidx,:);
+else
+    default_props = celd.props{1};
+end
+
+% plot signal
+if(numel(celd.data) > 1 && strcmp(handles.data_mode,'new'))
+    celd.properties = cellfun(@(c) handles.prop_map(c),celd.fkey);
+    props_table = struct2table(celd.properties);
+%     disp(props_table.signalLenght);
+    celd.stimulus = cell(2,1);
+    if(any(props_table.signalLenght-props_table.signalLenght(1))) % case of different signal length
+        disp('LIST:: finding duration vectors');
+        param.mode = 'duration';
+        [~,d_vec] = arrayfun(@(a) findStimulus(celd(a,:),param),(1:numel(celd.data)),'UniformOutput',false);
+        [~,head]= min(cellfun(@sum,d_vec));
+        default_props = handles.prop_map(cell2mat(celd.fkey(head)));
+        celd = resampleCellData(head, d_vec,celd);
+        celd.stimulus(:) = {handles.stim_map(cell2mat(celd.fkey(head)))};
+    else
+        celd.stimulus(:) = {cellfun(@(c) handles.stim_map(c),celd.fkey)};
+    end
+    dt = 1/default_props.imaging_rate;
+    time = (0:dt:( default_props.signalLenght-1 ) * dt);
+    mean_celd = meanData(celd);
+    
+    celd((2:end),:) = []; % TODO : save the celd as couple of responses and show their mean as discussed with Shy
+    celd.data.Df = mean_celd.F; celd.data.C = mean_celd.C; celd.data.S = mean_celd.S;
+    celd.data.S(celd.data.S <handles.param_SLDR) = 0;
+    param.baseline = mean_celd.baseline;
+    celd.data.S(celd.data.S < get(handles.param_SLDR,'Value')) = NaN;
+    celd.time = time;
+    
+    param.handles = handles; 
+    axes(handles.axes1);
+    set(gca,'NextPlot','replacechildren');
+    showInference_interactive(time, mean_celd.F, mean_celd.C, mean_celd.S, param)
+else% only 1 data recording
+    celd = celd(1,:);
+    dt = 1/default_props.imaging_rate;
+    time = (0:dt:( default_props.signalLenght-1 ) * dt);
+    param.baseline = mean(celd.data.mcmc_samples.Cb);
+    celd.time = time;
+    param.handles = handles;
+    celd.data.S(celd.data.S <handles.param_SLDR.Value) = 0;
+    
+    axes(handles.axes1);
+    set(gca,'NextPlot','replacechildren');
+    showInference_interactive(celd.time, celd.data.Df, celd.data.C, celd.data.S, param)
+end
+
+if(plot_mode)
+    % plot analysis
+    if(strcmp(handles.data_mode,'new'));celd.props = {handles.prop_map(cell2mat(celd.fkey))};end;
+    celd.data.S(isnan(celd.data.S)) = 0;
+    celd.data.S = reshape(celd.data.S,1,[]);
+    visualizeResponse( handles, celd, param );
+    
+    % log analysis
+end
+end
+
+
+function visualizeResponse(handles, cell_data, param )
+    if(any(ismember(cell_data.Properties.VariableNames,'properties')))
+        cell_data.props = {cell_data.properties};
+    end
+    switch cell_data.props{:}.stim_type
+        case 'ORI'
+            axes(handles.axes1);
+            set(gca,'NextPlot','replacechildren');
+            param.axis = [0 cell_data.time(end) min(cell_data.data.C)-eps 1.02.*max(cell_data.data.C)+eps];
+            param.scale_s = 1;
+            param.stimulus = cell_data.stim{:};
+            param.stim_type = cell_data.props{1}.stim_type;
+            showInference_interactive(cell_data.time, cell_data.data.Df, cell_data.data.C, cell_data.data.S, param)
+            log_table = oriSummary(handles, cell_data, param);
+            
+            % log
+            anova_details = evalc('log_table');
+            log_string = [
+                'QI: ',num2str(cell_data.data.QI),...
+                char(10),'MI: ',num2str(cell_data.data.MI),...
+                char(10),'CSD: ',num2str(cell_data.data.CSD),...
+                char(10),'*anova p value comparison*',...
+                anova_details(193:end)];
+            set( handles.analysis_TXT,'String',log_string );
+            
+        case 'CRP'
+            axes(handles.axes1);
+            set(gca,'NextPlot','replacechildren');
+            param.axis = [0 cell_data.time(end) min(cell_data.data.C)-eps 1.3.*max(cell_data.data.C)+eps];
+            param.scale_s = 1;
+            if(isfield(cell_data,'stim'))
+                param.stimulus = cell_data.stim{:};
+            else
+                stim_struct = handles.stim_map(cell2mat(cell_data.fkey));
+                param.stimulus = stim_struct.stim;
+            end
+            param.stim_type = cell_data.props{1}.stim_type;
+            showInference_interactive(cell_data.time, cell_data.data.Df, cell_data.data.C, cell_data.data.S, param)
+            
+            % summary function
+            [fv_s,fv_c, visu_vec_s ] = crpSummary(handles,cell_data);
+            if(~any(fv_s)); return; end;
+            
+            % plots
+            dict = containers.Map({'on';'off';'gray';'chirp';'amp'},[0;72;144;216;288]);
+            fig1 = figure(1);clf;
+            ax_1 = axes;
+            Options.AngleNorth = 0;Options.AngleEast = 90;
+            Options.nSpeeds = 5;Options.nDirections = 5;Options.nFreq = 3;
+            Options.Min_Radius = 0.15;Options.height = 512;Options.width = 512;
+            Options.cMap = 'summer';Options.legendType = 1;Options.axes = ax_1;
+            Options.scalefactor = 0.92; Options.TitleString = 'Chirp features Visual';
+            [~,~,~,~,Table] = WindRose(cellfun(@(c) dict(c),visu_vec_s(:,2)),...
+                cell2mat(visu_vec_s(:,1)),Options);
+            featureticks(ax_1);
+            set(fig1,'position',[ 2111 600 450 410]);    
+            cla(handles.axes2); set(handles.axes2,'Visible','off');axes(handles.axes2);
+            set(handles.axes2,'NextPlot','replacechildren');new_handle = copyobj(allchild(ax_1),handles.axes2);
+            
+            cla(handles.axes5)
+            axes(handles.axes5);
+            set(handles.axes5,'NextPlot','replacechildren');
+            bar([fv_s(1:3) mean(fv_s(4:8)) mean(fv_s(9:20))]...
+                ,'FaceColor',[0.7569    0.8667    0.7765],'EdgeColor',[0.7569    0.8667    0.7765],'LineWidth',1.5);
+            set(gca, 'XTickLabel',{'on';'off';'gray';'chirp';'amp'}, 'XTick',1:numel({'on';'off';'gray';'chirp';'amp'}))
+            
+            % log
+            tabel_total = Table(:,8);
+            tabel_total = cell2mat(tabel_total(3:end)');
+            log_string = [
+                'On: ',num2str(tabel_total(1)),...
+                char(10),'Off: ',num2str(tabel_total(2)),...
+                char(10),'Gray: ',num2str(tabel_total(3)),...
+                char(10),'Chirp: ',num2str(tabel_total(4)),...
+                char(10),'Amp: ',num2str(tabel_total(5))];
+            set( handles.analysis_TXT,'String',log_string );
+            
+        case 'BDN'
+            bdnSummary(handles,cell_data);
+            
+        case 'CNT'
+            cntSummary(handles,cell_data);
+            
+        case 'WGN'
+            [kernel,time] = wgnSummary(handles,cell_data);
+            axes(handles.axes2);
+            set(handles.axes2,'NextPlot','replacechildren');
+            plot(time, kernel);
+            xlabel('time [sec]');ylabel('STA intensity');
+            set(gca,'FontSize',11);
+        otherwise
+            error('stimulus type is not valid')
+    end
+end
+
+function [out] = meanData(cell_data)
+    if(any(ismember(cell_data.Properties.VariableNames,'properties')))
+        l = length(cell_data.data.C);
+    else
+        l = length(cell_data.data.C);
+    end
+    [all_data_S, all_data_C, all_data_F] = deal(zeros(1,l));
+    all_baseline = 0;
+    num_reps = numel(cell_data(:,1));
+    for k = 1:num_reps
+        all_data_C = all_data_C + cell_data(k,:).data.C;
+        all_data_S = all_data_S + cell_data(k,:).data.S;
+        all_data_F = all_data_F + cell_data(k,:).data.Df';
+        all_baseline = all_baseline + mean(cell_data(k,:).data.mcmc_samples.Cb);
+    end
+    out.S = reshape(all_data_S./num_reps,[],1);
+    out.C = reshape(all_data_C./num_reps,[],1);
+    out.F = reshape(all_data_F./num_reps,[],1);
+    out.baseline = all_baseline./num_reps;
+end
+
+function [ celd ] = resampleCellData(head, all_d,celd)
+%resampleCellData(head, all_d) gets a head index and all duration vectors
+%and normalizes all tail vectors (not head) according to head and do
+%histcounts to check which samples should be removed
+
+    l = numel(all_d);
+    tail = ones(l,1);
+    tail(head) = 0;
+    tail_d = all_d(logical(tail));
+   
+    for k = 1:numel(tail_d)
+        
+        % create time partition vector of tail according to tail_vec
+        tail_vec = ([0;cell2mat(tail_d(k))]);
+        tail_vec_cumsum = cumsum(tail_vec);
+        tail_nSamples = celd.properties(tail(k)).signalLenght;
+        tail_dt = 1/celd.properties(tail(k)).imaging_rate;
+        tail_lintime = linspace(0,(tail_nSamples-1) * tail_dt ,tail_nSamples);
+        counts_tail = histcounts(tail_vec_cumsum(2:end) ,[tail_lintime, inf])'; % stim to response
+        tail_time = cumsum(cellfun(@sum,(mat2cell(tail_vec(2:end),counts_tail,1))));
+        if(numel(tail_time) == celd.properties(tail(k)).signalLenght )
+            tail_time = [0; tail_time(1:end-1)];
+        end
+        
+        % N = number of sampels differing the head from tail
+        N = celd.properties(tail(k)).signalLenght - celd.properties(head).signalLenght;
+        
+        % for N largest dt's
+        [~, I] = sort(diff(tail_time));
+        if( all(diff(I((2:N)) == 1)) ) % checks if the smearing of time is uniform
+            binsize = floor(celd.properties(tail(k)).signalLenght/N);
+            index2mean = randi(binsize,N,1);
+            index2mean = index2mean + (0:N-1)' * binsize;
+        else
+            index2mean = [I((1:N));I((1:N))+1];
+        end
+        
+        % update data
+        celd.data(tail(k)).Df = meanAndThrow( celd.data(tail(k)).Df, index2mean );
+        celd.data(tail(k)).S = meanAndThrow( celd.data(tail(k)).S, index2mean );
+        celd.data(tail(k)).C = meanAndThrow( celd.data(tail(k)).C, index2mean );
+    end
+end
+
+function [ signal ]= meanAndThrow( signal, index )
+% takes the samples with index of the signal. means them and then replaces the mean
+% with the values of the index
+
+sig = signal(index);
+sig = reshape(sig,[],2);
+sig_val = mean(sig,2);
+signal(index(length(sig_val)+1:end)) = sig_val;
+signal(index(1:length(sig_val))) = [];
+end

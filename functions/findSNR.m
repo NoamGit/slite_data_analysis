@@ -3,7 +3,7 @@
 % standard deviation of the signal during one second period before stimulation)
 % load data of DF but without Kalmann filtering
 
-function SNR = findSNR( cellInd)
+function SNR = findSNR(cellInd)
   
     %% load data
     [fName, pathName] = uigetfile('D:\# Projects (Noam)\# SLITE\# DATA\*.xlsx','Select Cell''s Data Sheet');
